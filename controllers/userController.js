@@ -153,9 +153,19 @@ const respondToRequest = async (req, res) => {
   try {
     const { studentId, status } = req.body;
     
+    // Get lecturer profile first
+    const lecturer = await Lecturer.findOne({ user: req.user._id });
+    if (!lecturer) {
+      return res.status(404).json({ message: 'Lecturer profile not found' });
+    }
+    
     const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+    
     const request = student.requestedSupervisors.find(
-      req => req.lecturer.toString() === req.lecturer._id.toString()
+      req => req.lecturer.toString() === lecturer._id.toString()
     );
 
     if (!request) {
@@ -163,13 +173,14 @@ const respondToRequest = async (req, res) => {
     }
 
     request.status = status;
+    request.respondedAt = new Date();
     
     if (status === 'accepted') {
-      student.supervisor = req.lecturer._id;
+      student.supervisor = lecturer._id;
       
       // Update lecturer's current students count
       await Lecturer.findByIdAndUpdate(
-        req.lecturer._id,
+        lecturer._id,
         { $inc: { currentStudents: 1 } }
       );
 
@@ -178,7 +189,7 @@ const respondToRequest = async (req, res) => {
       await Thesis.create({
         title: student.thesisTopic || 'Untitled Thesis',
         student: student._id,
-        supervisor: req.lecturer._id
+        supervisor: lecturer._id
       });
     }
 
@@ -190,10 +201,100 @@ const respondToRequest = async (req, res) => {
       title: 'Supervision Request Update',
       message: `Your supervisor request has been ${status}.`,
       type: 'request',
-      relatedId: req.lecturer._id
+      relatedId: lecturer._id
     });
 
     res.json({ message: `Request ${status} successfully` });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get all supervision requests for a lecturer
+const getLecturerRequests = async (req, res) => {
+  try {
+    const lecturer = await Lecturer.findOne({ user: req.user._id });
+    
+    if (!lecturer) {
+      return res.status(404).json({ message: 'Lecturer profile not found' });
+    }
+
+    // Find all students who have requested this lecturer
+    const students = await Student.find({
+      'requestedSupervisors.lecturer': lecturer._id
+    })
+    .populate('user', 'fullName email department');
+
+    // Extract and format the requests
+    const requests = [];
+    students.forEach(student => {
+      student.requestedSupervisors.forEach(request => {
+        // Check if this request is for the current lecturer
+        if (request.lecturer && request.lecturer.toString() === lecturer._id.toString()) {
+          requests.push({
+            _id: request._id,
+            student: {
+              _id: student._id,
+              user: student.user,
+              studentId: student.studentId,
+              thesisTopic: student.thesisTopic,
+              yearOfStudy: student.yearOfStudy
+            },
+            status: request.status,
+            requestedAt: request.requestedAt,
+            respondedAt: request.respondedAt
+          });
+        }
+      });
+    });
+
+    // Sort by request date (newest first)
+    requests.sort((a, b) => new Date(b.requestedAt) - new Date(a.requestedAt));
+
+    res.json({ requests });
+  } catch (error) {
+    console.error('Error in getLecturerRequests:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get user's supervision requests (for students)
+const getUserRequests = async (req, res) => {
+  try {
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ message: 'Only students can access this endpoint' });
+    }
+
+    const student = await Student.findOne({ user: req.user._id })
+      .populate({
+        path: 'requestedSupervisors.lecturer',
+        select: 'staffId researchArea',
+        populate: {
+          path: 'user',
+          select: 'fullName email department'
+        }
+      });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student profile not found' });
+    }
+
+    // Format the requests for better frontend consumption
+    const formattedRequests = student.requestedSupervisors.map(request => ({
+      _id: request._id,
+      lecturer: request.lecturer,
+      status: request.status,
+      requestedAt: request.requestedAt,
+      respondedAt: request.respondedAt
+    }));
+
+    // Sort by request date (newest first)
+    formattedRequests.sort((a, b) => new Date(b.requestedAt) - new Date(a.requestedAt));
+
+    res.json({ 
+      requests: formattedRequests,
+      currentSupervisor: student.supervisor 
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -206,4 +307,6 @@ module.exports = {
   getLecturers,
   requestSupervisor,
   respondToRequest,
+  getLecturerRequests,
+  getUserRequests,
 };
