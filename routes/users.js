@@ -10,6 +10,9 @@ const {
   respondToRequest,
   getLecturerRequests,
   getUserRequests,
+  assignStudentsToLecturer,
+  bulkAssignStudents,
+  getUnassignedStudents,
 } = require('../controllers/userController');
 
 router.use(protect);
@@ -26,8 +29,13 @@ router.get('/lecturers', getLecturers);
 router.post('/request-supervisor', authorize('student'), requestSupervisor);
 router.put('/respond-request', authorize('lecturer'), respondToRequest);
 
-// NEW: Get requests routes
+// Get requests routes
 router.get('/lecturer-requests', authorize('lecturer'), getLecturerRequests);
 router.get('/my-requests', authorize('student'), getUserRequests);
+
+// Admin assignment routes
+router.get('/unassigned-students', authorize('admin'), getUnassignedStudents);
+router.post('/assign-students', authorize('admin'), assignStudentsToLecturer);
+router.post('/bulk-assign', authorize('admin'), bulkAssignStudents);
 
 module.exports = router;

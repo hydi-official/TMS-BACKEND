@@ -300,6 +300,299 @@ const getUserRequests = async (req, res) => {
   }
 };
 
+// Admin assign students to lecturer
+const assignStudentsToLecturer = async (req, res) => {
+  try {
+    const { lecturerId, studentIds } = req.body;
+
+    // Validate input
+    if (!lecturerId || !studentIds || !Array.isArray(studentIds) || studentIds.length === 0) {
+      return res.status(400).json({ 
+        message: 'Lecturer ID and an array of student IDs are required' 
+      });
+    }
+
+    // Check if lecturer exists
+    const lecturer = await Lecturer.findById(lecturerId).populate('user');
+    if (!lecturer) {
+      return res.status(404).json({ message: 'Lecturer not found' });
+    }
+
+    // Check lecturer's capacity (optional - you can set max students per lecturer)
+    const maxStudentsPerLecturer = 10; // Adjust as needed
+    const potentialTotalStudents = lecturer.currentStudents + studentIds.length;
+    
+    if (potentialTotalStudents > maxStudentsPerLecturer) {
+      return res.status(400).json({ 
+        message: `Lecturer can only supervise maximum ${maxStudentsPerLecturer} students. Current: ${lecturer.currentStudents}, Attempting to add: ${studentIds.length}` 
+      });
+    }
+
+    // Process each student
+    const results = {
+      successful: [],
+      failed: [],
+      alreadyAssigned: []
+    };
+
+    for (const studentId of studentIds) {
+      try {
+        const student = await Student.findById(studentId).populate('user');
+        
+        if (!student) {
+          results.failed.push({
+            studentId,
+            reason: 'Student not found'
+          });
+          continue;
+        }
+
+        // Check if student already has a supervisor
+        if (student.supervisor) {
+          const currentSupervisor = await Lecturer.findById(student.supervisor).populate('user');
+          results.alreadyAssigned.push({
+            studentId,
+            studentName: student.user.fullName,
+            currentSupervisor: currentSupervisor ? currentSupervisor.user.fullName : 'Unknown'
+          });
+          continue;
+        }
+
+        // Assign supervisor
+        student.supervisor = lecturerId;
+        await student.save();
+
+        // Create or update thesis record
+        const Thesis = require('../models/Thesis');
+        const existingThesis = await Thesis.findOne({ student: studentId });
+        
+        if (!existingThesis) {
+          await Thesis.create({
+            title: student.thesisTopic || 'Untitled Thesis',
+            student: studentId,
+            supervisor: lecturerId
+          });
+        } else {
+          existingThesis.supervisor = lecturerId;
+          await existingThesis.save();
+        }
+
+        // Create notification for student
+        await createNotification({
+          user: student.user._id,
+          title: 'Supervisor Assigned',
+          message: `You have been assigned ${lecturer.user.fullName} as your thesis supervisor.`,
+          type: 'assignment',
+          relatedId: lecturerId
+        });
+
+        // Create notification for lecturer
+        await createNotification({
+          user: lecturer.user._id,
+          title: 'New Student Assigned',
+          message: `${student.user.fullName} has been assigned to you for supervision.`,
+          type: 'assignment',
+          relatedId: studentId
+        });
+
+        results.successful.push({
+          studentId,
+          studentName: student.user.fullName,
+          studentEmail: student.user.email
+        });
+
+      } catch (error) {
+        results.failed.push({
+          studentId,
+          reason: error.message
+        });
+      }
+    }
+
+    // Update lecturer's student count
+    if (results.successful.length > 0) {
+      await Lecturer.findByIdAndUpdate(
+        lecturerId,
+        { $inc: { currentStudents: results.successful.length } }
+      );
+    }
+
+    res.json({
+      message: `Assignment completed. ${results.successful.length} students assigned successfully.`,
+      lecturerName: lecturer.user.fullName,
+      results
+    });
+
+  } catch (error) {
+    console.error('Error in assignStudentsToLecturer:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Admin bulk assignment - assign multiple students to multiple lecturers
+const bulkAssignStudents = async (req, res) => {
+  try {
+    const { assignments } = req.body;
+    // assignments format: [{ lecturerId: "...", studentIds: ["...", "..."] }, ...]
+
+    if (!assignments || !Array.isArray(assignments) || assignments.length === 0) {
+      return res.status(400).json({ 
+        message: 'Assignments array is required with format: [{ lecturerId, studentIds }]' 
+      });
+    }
+
+    const overallResults = {
+      successful: 0,
+      failed: 0,
+      alreadyAssigned: 0,
+      details: []
+    };
+
+    // Process each lecturer-students assignment
+    for (const assignment of assignments) {
+      const { lecturerId, studentIds } = assignment;
+      
+      if (!lecturerId || !studentIds || !Array.isArray(studentIds)) {
+        overallResults.details.push({
+          lecturerId,
+          error: 'Invalid assignment format'
+        });
+        overallResults.failed += studentIds ? studentIds.length : 1;
+        continue;
+      }
+
+      // Use the existing single assignment logic
+      const lecturer = await Lecturer.findById(lecturerId).populate('user');
+      if (!lecturer) {
+        overallResults.details.push({
+          lecturerId,
+          error: 'Lecturer not found'
+        });
+        overallResults.failed += studentIds.length;
+        continue;
+      }
+
+      // Process students for this lecturer
+      const assignmentResult = {
+        lecturerId,
+        lecturerName: lecturer.user.fullName,
+        successful: [],
+        failed: [],
+        alreadyAssigned: []
+      };
+
+      for (const studentId of studentIds) {
+        try {
+          const student = await Student.findById(studentId).populate('user');
+          
+          if (!student) {
+            assignmentResult.failed.push({ studentId, reason: 'Student not found' });
+            continue;
+          }
+
+          if (student.supervisor) {
+            const currentSupervisor = await Lecturer.findById(student.supervisor).populate('user');
+            assignmentResult.alreadyAssigned.push({
+              studentId,
+              studentName: student.user.fullName,
+              currentSupervisor: currentSupervisor ? currentSupervisor.user.fullName : 'Unknown'
+            });
+            continue;
+          }
+
+          // Assign supervisor
+          student.supervisor = lecturerId;
+          await student.save();
+
+          // Create thesis record
+          const Thesis = require('../models/Thesis');
+          const existingThesis = await Thesis.findOne({ student: studentId });
+          
+          if (!existingThesis) {
+            await Thesis.create({
+              title: student.thesisTopic || 'Untitled Thesis',
+              student: studentId,
+              supervisor: lecturerId
+            });
+          }
+
+          // Create notifications
+          await createNotification({
+            user: student.user._id,
+            title: 'Supervisor Assigned',
+            message: `You have been assigned ${lecturer.user.fullName} as your thesis supervisor.`,
+            type: 'assignment',
+            relatedId: lecturerId
+          });
+
+          await createNotification({
+            user: lecturer.user._id,
+            title: 'New Student Assigned',
+            message: `${student.user.fullName} has been assigned to you for supervision.`,
+            type: 'assignment',
+            relatedId: studentId
+          });
+
+          assignmentResult.successful.push({
+            studentId,
+            studentName: student.user.fullName
+          });
+
+        } catch (error) {
+          assignmentResult.failed.push({
+            studentId,
+            reason: error.message
+          });
+        }
+      }
+
+      // Update lecturer's student count
+      if (assignmentResult.successful.length > 0) {
+        await Lecturer.findByIdAndUpdate(
+          lecturerId,
+          { $inc: { currentStudents: assignmentResult.successful.length } }
+        );
+      }
+
+      // Update overall results
+      overallResults.successful += assignmentResult.successful.length;
+      overallResults.failed += assignmentResult.failed.length;
+      overallResults.alreadyAssigned += assignmentResult.alreadyAssigned.length;
+      overallResults.details.push(assignmentResult);
+    }
+
+    res.json({
+      message: `Bulk assignment completed. ${overallResults.successful} students assigned successfully.`,
+      summary: {
+        successful: overallResults.successful,
+        failed: overallResults.failed,
+        alreadyAssigned: overallResults.alreadyAssigned
+      },
+      details: overallResults.details
+    });
+
+  } catch (error) {
+    console.error('Error in bulkAssignStudents:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get unassigned students (for admin assignment interface)
+const getUnassignedStudents = async (req, res) => {
+  try {
+    const unassignedStudents = await Student.find({ supervisor: null })
+      .populate('user', 'fullName email department')
+      .select('studentId thesisTopic yearOfStudy user');
+
+    res.json({ 
+      count: unassignedStudents.length,
+      students: unassignedStudents 
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   getProfile,
   updateProfile,
@@ -309,4 +602,7 @@ module.exports = {
   respondToRequest,
   getLecturerRequests,
   getUserRequests,
+  assignStudentsToLecturer,
+  bulkAssignStudents,
+  getUnassignedStudents,
 };
