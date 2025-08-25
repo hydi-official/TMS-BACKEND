@@ -1,36 +1,37 @@
+// In your Notification model file (likely models/Notification.js)
 const mongoose = require('mongoose');
 
 const notificationSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true,
+    required: true
   },
   title: {
     type: String,
-    required: true,
+    required: true
   },
   message: {
     type: String,
-    required: true,
+    required: true
   },
   type: {
     type: String,
-    enum: ['submission', 'deadline', 'announcement', 'message', 'request', 'grade'],
-    required: true,
+    enum: ['request', 'assignment', 'general', 'reminder'], // Add 'assignment' here
+    required: true
   },
   relatedId: {
     type: mongoose.Schema.Types.ObjectId,
+    refPath: 'type'
   },
   isRead: {
     type: Boolean,
-    default: false,
+    default: false
   },
-  readAt: {
+  createdAt: {
     type: Date,
-  },
-}, {
-  timestamps: true,
+    default: Date.now
+  }
 });
 
 module.exports = mongoose.model('Notification', notificationSchema);
