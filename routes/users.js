@@ -6,6 +6,7 @@ const {
   updateProfile,
   getStudents,
   getLecturers,
+  getLecturerStudents, // Added new import
   requestSupervisor,
   respondToRequest,
   getLecturerRequests,
@@ -24,6 +25,9 @@ router.put('/profile', updateProfile);
 // General data routes
 router.get('/students', authorize('lecturer', 'admin'), getStudents);
 router.get('/lecturers', getLecturers);
+
+// NEW ROUTE: Get lecturer's students
+router.get('/my-students', authorize('lecturer'), getLecturerStudents);
 
 // Supervision request routes
 router.post('/request-supervisor', authorize('student'), requestSupervisor);

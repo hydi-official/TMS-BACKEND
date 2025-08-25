@@ -20,7 +20,7 @@ const lecturerSchema = new mongoose.Schema({
   },
   maxStudents: {
     type: Number,
-    default: 5,
+    default: 10,
   },
   currentStudents: {
     type: Number,

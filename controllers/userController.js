@@ -109,6 +109,55 @@ const getLecturers = async (req, res) => {
   }
 };
 
+// Get all students under a specific lecturer (for lecturer)
+const getLecturerStudents = async (req, res) => {
+  try {
+    // Find the lecturer's profile first
+    const lecturer = await Lecturer.findOne({ user: req.user._id });
+    
+    if (!lecturer) {
+      return res.status(404).json({ message: 'Lecturer profile not found' });
+    }
+
+    // Find all students assigned to this lecturer
+    const students = await Student.find({ supervisor: lecturer._id })
+      .populate('user', 'fullName email department')
+      .select('studentId thesisTopic yearOfStudy user createdAt')
+      .sort({ createdAt: -1 }); // Sort by newest first
+
+    // Also get thesis information if needed
+    const Thesis = require('../models/Thesis');
+    const studentsWithThesis = await Promise.all(
+      students.map(async (student) => {
+        const thesis = await Thesis.findOne({ 
+          student: student._id,
+          supervisor: lecturer._id 
+        }).select('title status progress createdAt updatedAt');
+        
+        return {
+          ...student.toObject(),
+          thesis: thesis || null
+        };
+      })
+    );
+
+    res.json({
+      count: studentsWithThesis.length,
+      lecturer: {
+        _id: lecturer._id,
+        staffId: lecturer.staffId,
+        name: req.user.fullName,
+        department: req.user.department,
+        researchArea: lecturer.researchArea
+      },
+      students: studentsWithThesis
+    });
+  } catch (error) {
+    console.error('Error in getLecturerStudents:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // Request supervisor (student)
 const requestSupervisor = async (req, res) => {
   try {
@@ -598,6 +647,7 @@ module.exports = {
   updateProfile,
   getStudents,
   getLecturers,
+  getLecturerStudents, // New function added here
   requestSupervisor,
   respondToRequest,
   getLecturerRequests,
