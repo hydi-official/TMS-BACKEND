@@ -4,7 +4,9 @@ const Lecturer = require('../models/Lecturer');
 const Admin = require('../models/Admin');
 const { createNotification } = require('../services/notificationService');
 const { validateProfileUpdate } = require('../utils/validation');
+const { cloudinary } = require('../config/cloudinary');
 
+// Get current user profile
 // Get current user profile
 const getProfile = async (req, res) => {
   try {
@@ -12,7 +14,13 @@ const getProfile = async (req, res) => {
     
     if (req.user.role === 'student') {
       profile = await Student.findOne({ user: req.user._id })
-        .populate('supervisor')
+        .populate({
+          path: 'supervisor',
+          populate: {
+            path: 'user',
+            select: 'fullName'
+          }
+        })
         .populate('requestedSupervisors.lecturer');
     } else if (req.user.role === 'lecturer') {
       profile = await Lecturer.findOne({ user: req.user._id })
@@ -33,7 +41,7 @@ const getProfile = async (req, res) => {
   }
 };
 
-// Update user profile
+// Update user profile (including profile picture)
 const updateProfile = async (req, res) => {
   try {
     const { fullName, email, department, researchArea, thesisTopic } = req.body;
@@ -45,10 +53,32 @@ const updateProfile = async (req, res) => {
       return res.status(400).json({ errors });
     }
 
+    // Prepare update data
+    const updateData = { fullName, email, department };
+    
+    // Handle profile picture upload if provided
+    if (req.file) {
+      // Delete old profile picture if exists
+      if (req.user.profilePicture && req.user.profilePicture.publicId) {
+        try {
+          await cloudinary.uploader.destroy(req.user.profilePicture.publicId);
+        } catch (cloudinaryError) {
+          console.error('Error deleting old profile picture:', cloudinaryError);
+          // Continue with update even if old image deletion fails
+        }
+      }
+      
+      // Add new profile picture data
+      updateData.profilePicture = {
+        url: req.file.path,
+        publicId: req.file.public_id,
+      };
+    }
+
     // Update user
     const user = await User.findByIdAndUpdate(
       req.user._id,
-      { fullName, email, department },
+      updateData,
       { new: true, runValidators: true }
     ).select('-pin');
 
@@ -67,7 +97,54 @@ const updateProfile = async (req, res) => {
       );
     }
 
-    res.json({ message: 'Profile updated successfully', user });
+    res.json({ 
+      message: 'Profile updated successfully', 
+      user,
+      profilePictureUpdated: !!req.file 
+    });
+  } catch (error) {
+    // If there was an error and a file was uploaded, try to clean it up
+    if (req.file && req.file.public_id) {
+      try {
+        await cloudinary.uploader.destroy(req.file.public_id);
+      } catch (cleanupError) {
+        console.error('Error cleaning up uploaded file:', cleanupError);
+      }
+    }
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Remove profile picture
+const removeProfilePicture = async (req, res) => {
+  try {
+    const user = req.user;
+    
+    if (!user.profilePicture || !user.profilePicture.publicId) {
+      return res.status(400).json({ message: 'No profile picture to remove' });
+    }
+
+    // Delete from Cloudinary
+    try {
+      await cloudinary.uploader.destroy(user.profilePicture.publicId);
+    } catch (cloudinaryError) {
+      console.error('Error deleting profile picture from Cloudinary:', cloudinaryError);
+      return res.status(500).json({ message: 'Failed to delete profile picture from cloud storage' });
+    }
+
+    // Update user document
+    const updatedUser = await User.findByIdAndUpdate(
+      user._id,
+      { 
+        $unset: { profilePicture: 1 } 
+      },
+      { new: true }
+    ).select('-pin');
+
+    res.json({ 
+      message: 'Profile picture removed successfully', 
+      user: updatedUser 
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -77,13 +154,13 @@ const updateProfile = async (req, res) => {
 const getStudents = async (req, res) => {
   try {
     const students = await Student.find()
-      .populate('user', 'fullName email department')
+      .populate('user', 'fullName email department profilePicture')
       .populate('supervisor', 'staffId researchArea')
       .populate({
         path: 'supervisor',
         populate: {
           path: 'user',
-          select: 'fullName'
+          select: 'fullName profilePicture'
         }
       });
 
@@ -97,10 +174,10 @@ const getStudents = async (req, res) => {
 const getLecturers = async (req, res) => {
   try {
     const lecturers = await Lecturer.find()
-      .populate('user', 'fullName email department')
+      .populate('user', 'fullName email department profilePicture')
       .populate({
         path: 'user',
-        select: 'fullName email department'
+        select: 'fullName email department profilePicture'
       });
 
     res.json(lecturers);
@@ -121,7 +198,7 @@ const getLecturerStudents = async (req, res) => {
 
     // Find all students assigned to this lecturer
     const students = await Student.find({ supervisor: lecturer._id })
-      .populate('user', 'fullName email department')
+      .populate('user', 'fullName email department profilePicture')
       .select('studentId thesisTopic yearOfStudy user createdAt')
       .sort({ createdAt: -1 }); // Sort by newest first
 
@@ -148,7 +225,8 @@ const getLecturerStudents = async (req, res) => {
         staffId: lecturer.staffId,
         name: req.user.fullName,
         department: req.user.department,
-        researchArea: lecturer.researchArea
+        researchArea: lecturer.researchArea,
+        profilePicture: req.user.profilePicture
       },
       students: studentsWithThesis
     });
@@ -272,7 +350,7 @@ const getLecturerRequests = async (req, res) => {
     const students = await Student.find({
       'requestedSupervisors.lecturer': lecturer._id
     })
-    .populate('user', 'fullName email department');
+    .populate('user', 'fullName email department profilePicture');
 
     // Extract and format the requests
     const requests = [];
@@ -320,7 +398,7 @@ const getUserRequests = async (req, res) => {
         select: 'staffId researchArea',
         populate: {
           path: 'user',
-          select: 'fullName email department'
+          select: 'fullName email department profilePicture'
         }
       });
 
@@ -630,7 +708,7 @@ const bulkAssignStudents = async (req, res) => {
 const getUnassignedStudents = async (req, res) => {
   try {
     const unassignedStudents = await Student.find({ supervisor: null })
-      .populate('user', 'fullName email department')
+      .populate('user', 'fullName email department profilePicture')
       .select('studentId thesisTopic yearOfStudy user');
 
     res.json({ 
@@ -645,9 +723,10 @@ const getUnassignedStudents = async (req, res) => {
 module.exports = {
   getProfile,
   updateProfile,
+  removeProfilePicture, // New function added
   getStudents,
   getLecturers,
-  getLecturerStudents, // New function added here
+  getLecturerStudents,
   requestSupervisor,
   respondToRequest,
   getLecturerRequests,

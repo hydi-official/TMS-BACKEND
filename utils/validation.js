@@ -19,6 +19,29 @@ const isStrongPassword = (password) => {
   });
 };
 
+// Validate image file type
+const isValidImageFile = (file) => {
+  if (!file) return true; // No file is valid (optional)
+  
+  const allowedMimeTypes = [
+    'image/jpeg',
+    'image/jpg', 
+    'image/png', 
+    'image/gif', 
+    'image/webp'
+  ];
+  
+  return allowedMimeTypes.includes(file.mimetype);
+};
+
+// Validate image file size (5MB limit)
+const isValidImageSize = (file) => {
+  if (!file) return true; // No file is valid (optional)
+  
+  const maxSizeInBytes = 5 * 1024 * 1024; // 5MB
+  return file.size <= maxSizeInBytes;
+};
+
 // Validate user registration data
 // Updated validation function to be more flexible
 const validateRegistration = async (data, role) => {
@@ -87,6 +110,7 @@ const validateRegistration = async (data, role) => {
     isValid: Object.keys(errors).length === 0
   };
 };
+
 // Validate login data
 const validateLogin = (data) => {
   const errors = {};
@@ -191,8 +215,8 @@ const validateAnnouncement = (data) => {
   };
 };
 
-// Validate profile update data
-const validateProfileUpdate = (data, role) => {
+// Validate profile update data (including profile picture)
+const validateProfileUpdate = (data, role, file = null) => {
   const errors = {};
   
   if (data.email && !isValidEmail(data.email)) {
@@ -211,6 +235,43 @@ const validateProfileUpdate = (data, role) => {
     errors.researchArea = 'Research area must be at least 3 characters';
   }
   
+  // Validate profile picture if provided
+  if (file) {
+    if (!isValidImageFile(file)) {
+      errors.profilePicture = 'Invalid image file type. Only JPEG, PNG, GIF, and WebP are allowed';
+    }
+    
+    if (!isValidImageSize(file)) {
+      errors.profilePicture = 'Image file size must be less than 5MB';
+    }
+  }
+  
+  return {
+    errors,
+    isValid: Object.keys(errors).length === 0
+  };
+};
+
+// Validate profile picture upload specifically
+const validateProfilePictureUpload = (file) => {
+  const errors = {};
+  
+  if (!file) {
+    errors.profilePicture = 'Profile picture file is required';
+    return {
+      errors,
+      isValid: false
+    };
+  }
+  
+  if (!isValidImageFile(file)) {
+    errors.profilePicture = 'Invalid image file type. Only JPEG, PNG, GIF, and WebP are allowed';
+  }
+  
+  if (!isValidImageSize(file)) {
+    errors.profilePicture = 'Image file size must be less than 5MB';
+  }
+  
   return {
     errors,
     isValid: Object.keys(errors).length === 0
@@ -220,6 +281,8 @@ const validateProfileUpdate = (data, role) => {
 module.exports = {
   isValidEmail,
   isStrongPassword,
+  isValidImageFile,
+  isValidImageSize,
   validateRegistration,
   validateLogin,
   validateThesis,
@@ -227,4 +290,5 @@ module.exports = {
   validateMessage,
   validateAnnouncement,
   validateProfileUpdate,
+  validateProfilePictureUpload,
 };

@@ -33,6 +33,16 @@ const userSchema = new mongoose.Schema({
   department: {
     type: String,
   },
+  profilePicture: {
+    url: {
+      type: String,
+      default: null,
+    },
+    publicId: {
+      type: String,
+      default: null,
+    },
+  },
   isVerified: {
     type: Boolean,
     default: false,
