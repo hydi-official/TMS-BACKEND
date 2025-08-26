@@ -5,6 +5,7 @@ const { uploadThesis } = require('../middleware/upload'); // Import the correct 
 const {
   createSubmission,
   getSubmissions,
+  getMySubmissions, // Add the new function import
   submitWork,
   gradeSubmission,
 } = require('../controllers/submissionController');
@@ -12,8 +13,11 @@ const {
 // Apply authentication middleware to all routes
 router.use(protect);
 
-// Get all submissions
+// Get all submissions (for lecturers - gets their supervised students' submissions)
 router.get('/', getSubmissions);
+
+// Get current user's own submissions (for students - gets their own submissions only)
+router.get('/my-submissions', authorize('student'), getMySubmissions);
 
 // Create new submission (lecturer only)
 router.post('/', authorize('lecturer'), createSubmission);
