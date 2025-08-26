@@ -1,7 +1,7 @@
 const Submission = require('../models/Submission');
 const Student = require('../models/Student');
 const { createNotification } = require('../services/notificationService');
-const { sendEmail } = require('../services/emailService');
+const { sendSubmissionNotificationEmail } = require('../services/emailService');
 
 // Create submission (lecturer)
 const createSubmission = async (req, res) => {
@@ -10,7 +10,8 @@ const createSubmission = async (req, res) => {
 
     // For single student
     if (studentIds && studentIds.length === 1) {
-      const student = await Student.findById(studentIds[0]);
+      const student = await Student.findById(studentIds[0])
+        .populate('user', 'fullName email');
       
       const submission = await Submission.create({
         title,
@@ -23,22 +24,15 @@ const createSubmission = async (req, res) => {
 
       // Create notification for student
       await createNotification({
-        user: student.user,
+        user: student.user._id,
         title: 'New Submission Created',
         message: `A new submission "${title}" has been created with deadline ${deadline}.`,
         type: 'submission',
         relatedId: submission._id
       });
 
-      // Send email notification
-      await sendEmail({
-        to: student.user.email,
-        subject: 'New Submission Created',
-        html: `<p>Hello ${student.user.fullName},</p>
-               <p>A new submission "${title}" has been created by your supervisor.</p>
-               <p>Deadline: ${new Date(deadline).toLocaleDateString()}</p>
-               <p>Please submit before the deadline.</p>`
-      });
+      // Send email notification using the template
+      await sendSubmissionNotificationEmail(student.user, submission, 'created');
 
       return res.status(201).json(submission);
     }
@@ -46,7 +40,8 @@ const createSubmission = async (req, res) => {
     // For multiple students
     const submissions = [];
     for (const studentId of studentIds) {
-      const student = await Student.findById(studentId);
+      const student = await Student.findById(studentId)
+        .populate('user', 'fullName email');
       
       const submission = await Submission.create({
         title,
@@ -61,26 +56,20 @@ const createSubmission = async (req, res) => {
 
       // Create notification for student
       await createNotification({
-        user: student.user,
+        user: student.user._id,
         title: 'New Submission Created',
         message: `A new submission "${title}" has been created with deadline ${deadline}.`,
         type: 'submission',
         relatedId: submission._id
       });
 
-      // Send email notification
-      await sendEmail({
-        to: student.user.email,
-        subject: 'New Submission Created',
-        html: `<p>Hello ${student.user.fullName},</p>
-               <p>A new submission "${title}" has been created by your supervisor.</p>
-               <p>Deadline: ${new Date(deadline).toLocaleDateString()}</p>
-               <p>Please submit before the deadline.</p>`
-      });
+      // Send email notification using the template
+      await sendSubmissionNotificationEmail(student.user, submission, 'created');
     }
 
     res.status(201).json(submissions);
   } catch (error) {
+    console.error('Create submission error:', error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -123,6 +112,7 @@ const getSubmissions = async (req, res) => {
 };
 
 // Submit work (student)
+// Submit work (student)
 const submitWork = async (req, res) => {
   try {
     if (!req.file) {
@@ -130,8 +120,11 @@ const submitWork = async (req, res) => {
     }
 
     const student = await Student.findOne({ user: req.user._id });
-    const submission = await Submission.findById(req.params.id);
+    if (!student) {
+      return res.status(404).json({ message: 'Student profile not found' });
+    }
 
+    const submission = await Submission.findById(req.params.id);
     if (!submission) {
       return res.status(404).json({ message: 'Submission not found' });
     }
@@ -155,17 +148,25 @@ const submitWork = async (req, res) => {
 
     await submission.save();
 
-    // Create notification for supervisor
-    await createNotification({
-      user: submission.supervisor.user,
-      title: 'New Submission',
-      message: `${req.user.fullName} has submitted "${submission.title}".`,
-      type: 'submission',
-      relatedId: submission._id
-    });
+    // Create notification for supervisor (lecturer)
+    // Fix: Use Lecturer model instead of Student model
+    const Lecturer = require('../models/Lecturer'); // Make sure to require the Lecturer model
+    
+    const supervisorUser = await Lecturer.findById(submission.supervisor).populate('user');
+    
+    if (supervisorUser && supervisorUser.user) {
+      await createNotification({
+        user: supervisorUser.user._id,
+        title: 'New Submission',
+        message: `${req.user.fullName} has submitted "${submission.title}".`,
+        type: 'submission',
+        relatedId: submission._id
+      });
+    }
 
     res.json({ message: 'Work submitted successfully', submission });
   } catch (error) {
+    console.error('Submit work error:', error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -202,23 +203,15 @@ const gradeSubmission = async (req, res) => {
 
     // Create notification for student
     await createNotification({
-      user: submission.student.user,
+      user: submission.student.user._id,
       title: 'Submission Graded',
       message: `Your submission "${submission.title}" has been graded.`,
       type: 'grade',
       relatedId: submission._id
     });
 
-    // Send email notification
-    await sendEmail({
-      to: submission.student.user.email,
-      subject: 'Submission Graded',
-      html: `<p>Hello ${submission.student.user.fullName},</p>
-             <p>Your submission "${submission.title}" has been graded.</p>
-             <p>Grade: ${grade}</p>
-             <p>Status: ${status}</p>
-             <p>Feedback: ${feedback}</p>`
-    });
+    // Send email notification using the template
+    await sendSubmissionNotificationEmail(submission.student.user, submission, 'graded');
 
     res.json({ message: 'Submission graded successfully', submission });
   } catch (error) {

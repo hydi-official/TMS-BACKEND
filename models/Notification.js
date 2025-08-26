@@ -1,4 +1,3 @@
-// In your Notification model file (likely models/Notification.js)
 const mongoose = require('mongoose');
 
 const notificationSchema = new mongoose.Schema({
@@ -17,7 +16,7 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['request', 'assignment', 'general', 'reminder', 'announcement','submission'], 
+    enum: ['request', 'assignment', 'general', 'reminder', 'announcement', 'submission', 'grade'], 
     required: true
   },
   relatedId: {
