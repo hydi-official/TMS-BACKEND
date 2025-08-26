@@ -399,11 +399,218 @@ const gradeSubmission = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+// Get student's grades (all graded submissions)
+const getMyGrades = async (req, res) => {
+  try {
+    console.log('=== GET MY GRADES ===');
+    console.log('Authenticated user ID:', req.user._id);
+    console.log('User role:', req.user.role);
 
+    const student = await Student.findOne({ user: req.user._id })
+      .populate('user', 'fullName email');
+    
+    if (!student) {
+      return res.status(404).json({ message: 'Student profile not found' });
+    }
+
+    console.log('Found student profile:', {
+      studentId: student._id,
+      name: student.user.fullName,
+      email: student.user.email
+    });
+
+    // Find all graded submissions for this student
+    const gradedSubmissions = await Submission.find({ 
+      student: student._id,
+      status: { $in: ['accepted', 'rejected'] }, // Only graded submissions
+      grade: { $exists: true, $ne: null } // Must have a grade
+    })
+    .populate('student', 'studentId thesisTopic')
+    .populate({
+      path: 'student',
+      populate: {
+        path: 'user',
+        select: 'fullName email'
+      }
+    })
+    .populate('supervisor', 'staffId')
+    .populate({
+      path: 'supervisor',
+      populate: {
+        path: 'user',
+        select: 'fullName'
+      }
+    })
+    .sort('-gradedAt'); // Sort by most recently graded
+
+    console.log(`Found ${gradedSubmissions.length} graded submissions for this student`);
+
+    // Calculate statistics
+    const grades = gradedSubmissions.map(sub => parseFloat(sub.grade)).filter(grade => !isNaN(grade));
+    const statistics = {
+      totalGraded: gradedSubmissions.length,
+      averageGrade: grades.length > 0 ? (grades.reduce((sum, grade) => sum + grade, 0) / grades.length).toFixed(2) : null,
+      highestGrade: grades.length > 0 ? Math.max(...grades) : null,
+      lowestGrade: grades.length > 0 ? Math.min(...grades) : null,
+      passedSubmissions: gradedSubmissions.filter(sub => sub.status === 'accepted').length,
+      failedSubmissions: gradedSubmissions.filter(sub => sub.status === 'rejected').length
+    };
+
+    // Format response data
+    const gradesData = gradedSubmissions.map(submission => ({
+      _id: submission._id,
+      title: submission.title,
+      stage: submission.stage,
+      grade: submission.grade,
+      feedback: submission.feedback,
+      status: submission.status,
+      submittedAt: submission.submittedAt,
+      gradedAt: submission.gradedAt,
+      deadline: submission.deadline,
+      supervisor: {
+        name: submission.supervisor?.user?.fullName || 'Unknown',
+        staffId: submission.supervisor?.staffId
+      }
+    }));
+
+    res.json({
+      grades: gradesData,
+      statistics,
+      studentInfo: {
+        studentId: student._id,
+        name: student.user.fullName,
+        email: student.user.email,
+        studentNumber: student.studentId,
+        thesisTopic: student.thesisTopic
+      }
+    });
+  } catch (error) {
+    console.error('Get my grades error:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get detailed grade report for a student (can be used by student or supervisor)
+const getStudentGradeReport = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    
+    // Authorization check
+    if (req.user.role === 'student') {
+      const student = await Student.findOne({ user: req.user._id });
+      if (!student || student._id.toString() !== studentId) {
+        return res.status(403).json({ message: 'You can only view your own grade report' });
+      }
+    } else if (req.user.role === 'lecturer') {
+      // Lecturer can only view grades of their supervised students
+      const Lecturer = require('../models/Lecturer');
+      const lecturer = await Lecturer.findOne({ user: req.user._id });
+      const student = await Student.findById(studentId);
+      
+      if (!lecturer || !student || student.supervisor?.toString() !== lecturer._id.toString()) {
+        return res.status(403).json({ message: 'You can only view grades of students you supervise' });
+      }
+    }
+    // Admin can view any student's grades (no additional check needed)
+
+    const student = await Student.findById(studentId)
+      .populate('user', 'fullName email department')
+      .populate({
+        path: 'supervisor',
+        populate: {
+          path: 'user',
+          select: 'fullName'
+        }
+      });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
+    // Get all submissions (graded and ungraded) for comprehensive report
+    const submissions = await Submission.find({ student: studentId })
+      .populate({
+        path: 'supervisor',
+        populate: {
+          path: 'user',
+          select: 'fullName'
+        }
+      })
+      .sort('-createdAt');
+
+    // Separate graded and ungraded submissions
+    const gradedSubmissions = submissions.filter(sub => 
+      sub.grade !== null && sub.grade !== undefined && 
+      (sub.status === 'accepted' || sub.status === 'rejected')
+    );
+    
+    const pendingSubmissions = submissions.filter(sub => 
+      sub.status === 'submitted' || sub.status === 'not-submitted'
+    );
+
+    // Calculate comprehensive statistics
+    const grades = gradedSubmissions.map(sub => parseFloat(sub.grade)).filter(grade => !isNaN(grade));
+    const statistics = {
+      totalSubmissions: submissions.length,
+      gradedSubmissions: gradedSubmissions.length,
+      pendingSubmissions: pendingSubmissions.length,
+      notSubmitted: submissions.filter(sub => sub.status === 'not-submitted').length,
+      averageGrade: grades.length > 0 ? (grades.reduce((sum, grade) => sum + grade, 0) / grades.length).toFixed(2) : null,
+      highestGrade: grades.length > 0 ? Math.max(...grades) : null,
+      lowestGrade: grades.length > 0 ? Math.min(...grades) : null,
+      passedSubmissions: gradedSubmissions.filter(sub => sub.status === 'accepted').length,
+      failedSubmissions: gradedSubmissions.filter(sub => sub.status === 'rejected').length,
+      completionRate: submissions.length > 0 ? ((submissions.filter(sub => sub.status !== 'not-submitted').length / submissions.length) * 100).toFixed(1) : 0
+    };
+
+    // Format submissions data
+    const formattedSubmissions = submissions.map(submission => ({
+      _id: submission._id,
+      title: submission.title,
+      stage: submission.stage,
+      status: submission.status,
+      grade: submission.grade,
+      feedback: submission.feedback,
+      deadline: submission.deadline,
+      submittedAt: submission.submittedAt,
+      gradedAt: submission.gradedAt,
+      isOverdue: submission.status === 'not-submitted' && new Date() > submission.deadline,
+      supervisor: {
+        name: submission.supervisor?.user?.fullName || 'Unknown',
+      }
+    }));
+
+    res.json({
+      student: {
+        _id: student._id,
+        name: student.user.fullName,
+        email: student.user.email,
+        department: student.user.department,
+        studentId: student.studentId,
+        thesisTopic: student.thesisTopic,
+        supervisor: student.supervisor ? {
+          name: student.supervisor.user.fullName
+        } : null
+      },
+      statistics,
+      submissions: formattedSubmissions,
+      gradedSubmissions: formattedSubmissions.filter(sub => sub.grade !== null && sub.grade !== undefined),
+      pendingSubmissions: formattedSubmissions.filter(sub => sub.status === 'submitted'),
+      overdueSubmissions: formattedSubmissions.filter(sub => sub.isOverdue)
+    });
+  } catch (error) {
+    console.error('Get student grade report error:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ==================== ADD TO submissionController.js EXPORTS ====================
 module.exports = {
   createSubmission,
   getSubmissions,
-  getMySubmissions, // Make sure this is exported
+  getMySubmissions,
   submitWork,
   gradeSubmission,
+  getMyGrades, // Add this
+  getStudentGradeReport, // Add this
 };
